@@ -46,16 +46,28 @@ jobs:
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $installPath = & $vswhere -latest -products * -property installationPath
+          $installPath = (& $vswhere -latest -products * -property installationPath).Trim()
           Write-Host "Visual Studio install path: $installPath"
+
           $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
-          Start-Process -FilePath $installer -ArgumentList @(
+          $proc = Start-Process -FilePath $installer -ArgumentList @(
             "modify",
-            "--installPath", "`"$installPath`"",
+            "--installPath", $installPath,
             "--add", "Microsoft.VisualStudio.Component.VC.ATL",
             "--add", "Microsoft.VisualStudio.Component.VC.ATL.Spectre",
             "--quiet", "--norestart", "--nocache"
           ) -Wait -PassThru
+          Write-Host "vs_installer exit code: $($proc.ExitCode)"
+
+          # Double-check the header file the build actually needs is now present,
+          # regardless of what exit code the installer reported.
+          $header = Get-ChildItem -Path $installPath -Filter "atlcomcli.h" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($header) {
+            Write-Host "Confirmed: found atlcomcli.h at $($header.FullName)"
+          } else {
+            Write-Error "atlcomcli.h still not found anywhere under $installPath after installing ATL. The install may have failed."
+            exit 1
+          }
 
       - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
         shell: pwsh
