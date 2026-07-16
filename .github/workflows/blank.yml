@@ -11,6 +11,7 @@ jobs:
     # This is the important part: GitHub gives us a real, temporary Windows
     # computer that already has Visual Studio 2022 Build Tools installed.
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out the repository (this just gets the zip file)
@@ -39,35 +40,30 @@ jobs:
           # Save that folder path so later steps can use it
           "SLN_DIR=$($sln.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Make sure MSBuild is on the PATH
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Install the ATL component (this project needs it, some runners don't have it by default)
+      - name: Install just the C++ build tools + ATL we need (fresh, minimal, fast)
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $installPath = (& $vswhere -latest -products * -property installationPath).Trim()
-          Write-Host "Visual Studio install path: $installPath"
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "Downloading the Visual Studio Build Tools installer..."
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile "vs_buildtools.exe"
 
-          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
-          $proc = Start-Process -FilePath $installer -ArgumentList @(
-            "modify",
-            "--installPath", $installPath,
+          Write-Host "Installing C++ workload + ATL (this installs a small separate copy, a few minutes)..."
+          $proc = Start-Process -FilePath ".\vs_buildtools.exe" -ArgumentList @(
+            "--quiet", "--wait", "--norestart", "--nocache",
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
             "--add", "Microsoft.VisualStudio.Component.VC.ATL",
             "--add", "Microsoft.VisualStudio.Component.VC.ATL.Spectre",
-            "--quiet", "--norestart", "--nocache"
+            "--includeRecommended"
           ) -Wait -PassThru
-          Write-Host "vs_installer exit code: $($proc.ExitCode)"
-
-          # Double-check the header file the build actually needs is now present,
-          # regardless of what exit code the installer reported.
-          $header = Get-ChildItem -Path $installPath -Filter "atlcomcli.h" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($header) {
-            Write-Host "Confirmed: found atlcomcli.h at $($header.FullName)"
-          } else {
-            Write-Error "atlcomcli.h still not found anywhere under $installPath after installing ATL. The install may have failed."
+          Write-Host "Installer exit code: $($proc.ExitCode)"
+          # Exit code 3010 means "success, reboot recommended" - fine to ignore in CI.
+          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+            Write-Error "Build Tools install failed with exit code $($proc.ExitCode)"
             exit 1
           }
+
+      - name: Make sure MSBuild is on the PATH
+        uses: microsoft/setup-msbuild@v2
 
       - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
         shell: pwsh
