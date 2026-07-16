@@ -1,0 +1,67 @@
+name: Build Whisper Desktop (Windows)
+
+# This lets you trigger the build by hand from the "Actions" tab on GitHub.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    # This is the important part: GitHub gives us a real, temporary Windows
+    # computer that already has Visual Studio 2022 Build Tools installed.
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out the repository (this just gets the zip file)
+        uses: actions/checkout@v4
+
+      - name: Unzip the source code
+        shell: pwsh
+        run: |
+          # Find whichever .zip file you uploaded to the repo, no matter its exact name
+          $zip = Get-ChildItem -Path . -Filter *.zip -File | Select-Object -First 1
+          if (-not $zip) {
+            Write-Error "No .zip file was found in the repository root. Make sure you uploaded the zip to the repo's main page."
+            exit 1
+          }
+          Write-Host "Found zip: $($zip.Name)"
+          Expand-Archive -Path $zip.FullName -DestinationPath "src_extracted" -Force
+
+          # The zip contains one top-level folder (e.g. Whisper-1.12.0). Find the
+          # folder that actually has WhisperCpp.sln in it, however deep it is.
+          $sln = Get-ChildItem -Path "src_extracted" -Filter "WhisperCpp.sln" -Recurse | Select-Object -First 1
+          if (-not $sln) {
+            Write-Error "Could not find WhisperCpp.sln anywhere inside the zip."
+            exit 1
+          }
+          Write-Host "Found solution at: $($sln.FullName)"
+          # Save that folder path so later steps can use it
+          "SLN_DIR=$($sln.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Make sure MSBuild is on the PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
+        shell: pwsh
+        run: |
+          msbuild "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+        working-directory: ${{ env.SLN_DIR }}
+
+      - name: Collect the finished files into one folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Copy-Item "$env:SLN_DIR\Whisper\x64\Release\Whisper.dll" "bin\Whisper.dll"
+          Copy-Item "$env:SLN_DIR\Examples\WhisperDesktop\x64\Release\WhisperDesktop.exe" "bin\WhisperDesktop.exe"
+          $manifest = Join-Path $env:SLN_DIR "Examples\WhisperDesktop\WhisperDesktop.manifest"
+          if (Test-Path $manifest) { Copy-Item $manifest "bin\WhisperDesktop.manifest" }
+          $icon = Join-Path $env:SLN_DIR "Examples\WhisperDesktop\sunflower.ico"
+          if (Test-Path $icon) { Copy-Item $icon "bin\sunflower.ico" }
+
+      # This is what makes the finished .dll and .exe downloadable afterward.
+      - name: Upload the built files
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhisperDesktop-build
+          path: bin/
