@@ -42,10 +42,25 @@ jobs:
       - name: Make sure MSBuild is on the PATH
         uses: microsoft/setup-msbuild@v2
 
+      - name: Install the ATL component (this project needs it, some runners don't have it by default)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * -property installationPath
+          Write-Host "Visual Studio install path: $installPath"
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          Start-Process -FilePath $installer -ArgumentList @(
+            "modify",
+            "--installPath", "`"$installPath`"",
+            "--add", "Microsoft.VisualStudio.Component.VC.ATL",
+            "--add", "Microsoft.VisualStudio.Component.VC.ATL.Spectre",
+            "--quiet", "--norestart", "--nocache"
+          ) -Wait -PassThru
+
       - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
         shell: pwsh
         run: |
-          msbuild "WhisperCpp.sln" /t:ComLightLib;Whisper;WhisperDesktop /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+          msbuild "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
         working-directory: ${{ env.SLN_DIR }}
 
       - name: Collect the finished files into one folder
