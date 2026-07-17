@@ -66,6 +66,19 @@ jobs:
             Write-Host "No alignas issue found in ggmlMsvc.c (already fine, nothing to do)."
           }
 
+          # Third issue: WhisperDesktop.vcxproj has no AdditionalIncludeDirectories set at
+          # all (the original developer likely had this configured machine-wide, outside
+          # the repo). It needs to find Whisper/API/whisperWindows.h. Add that include path.
+          $wd = Join-Path $env:SLN_DIR "Examples\WhisperDesktop\WhisperDesktop.vcxproj"
+          $wdContent = Get-Content $wd -Raw
+          if ($wdContent -notmatch 'AdditionalIncludeDirectories') {
+            $wdFixed = $wdContent -replace '(<ClCompile>)', "`$1`r`n      <AdditionalIncludeDirectories>`$(SolutionDir)Whisper\API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>"
+            Set-Content -Path $wd -Value $wdFixed -NoNewline -Encoding UTF8
+            Write-Host "Fixed: added the missing include path (Whisper\API) to WhisperDesktop.vcxproj."
+          } else {
+            Write-Host "WhisperDesktop.vcxproj already has AdditionalIncludeDirectories set, nothing to do."
+          }
+
       - name: Disable multi-file parallel compilation for the Whisper project (avoids a known precompiled-header race)
         shell: pwsh
         run: |
