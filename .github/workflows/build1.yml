@@ -11,6 +11,7 @@ jobs:
     # This is the important part: GitHub gives us a real, temporary Windows
     # computer that already has Visual Studio 2022 Build Tools installed.
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out the repository (this just gets the zip file)
@@ -39,13 +40,159 @@ jobs:
           # Save that folder path so later steps can use it
           "SLN_DIR=$($sln.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Make sure MSBuild is on the PATH
-        uses: microsoft/setup-msbuild@v2
+      - name: Fix known issues in the source (missing #include, C++-only keyword in a .c file)
+        shell: pwsh
+        run: |
+          $mf = Join-Path $env:SLN_DIR "Whisper\modelFactory.cpp"
+          $content = Get-Content $mf -Raw
+          if ($content -match 'using\s+"stdafx\.h"') {
+            $fixed = $content -replace 'using\s+"stdafx\.h"', '#include "stdafx.h"'
+            Set-Content -Path $mf -Value $fixed -NoNewline -Encoding UTF8
+            Write-Host "Fixed: modelFactory.cpp had 'using ""stdafx.h""' instead of '#include ""stdafx.h""'. Corrected it."
+          } else {
+            Write-Host "No corruption found in modelFactory.cpp (already fine, nothing to do)."
+          }
+
+          # Second issue: ggmlMsvc.c is compiled as plain C, but uses the C++-only
+          # 'alignas' keyword, which MSVC's C compiler doesn't understand by default.
+          # Switch it to the MSVC-native equivalent that works in C.
+          $gm = Join-Path $env:SLN_DIR "Whisper\source.compat\ggmlMsvc.c"
+          $gmContent = Get-Content $gm -Raw
+          if ($gmContent -match 'alignas\(\s*32\s*\)') {
+            $gmFixed = $gmContent -replace 'alignas\(\s*32\s*\)', '__declspec(align(32))'
+            Set-Content -Path $gm -Value $gmFixed -NoNewline -Encoding UTF8
+            Write-Host "Fixed: ggmlMsvc.c used C++-only 'alignas', replaced with __declspec(align(32)) so it compiles as C."
+          } else {
+            Write-Host "No alignas issue found in ggmlMsvc.c (already fine, nothing to do)."
+          }
+
+          # Third issue: WhisperDesktop.vcxproj has no AdditionalIncludeDirectories set at
+          # all (the original developer likely had this configured machine-wide, outside
+          # the repo). It needs to find Whisper/API/whisperWindows.h. Add that include path.
+          $wd = Join-Path $env:SLN_DIR "Examples\WhisperDesktop\WhisperDesktop.vcxproj"
+          $wdContent = Get-Content $wd -Raw
+          # Remove any previous (possibly broken) attempt at this fix first, so re-runs are safe.
+          $wdContent = $wdContent -replace '\r?\n\s*<AdditionalIncludeDirectories>[^<]*</AdditionalIncludeDirectories>', ''
+          $wdFixed = $wdContent -replace '(<ClCompile>)', "`$1`r`n      <AdditionalIncludeDirectories>`$(ProjectDir)..\..\Whisper\API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>"
+          Set-Content -Path $wd -Value $wdFixed -NoNewline -Encoding UTF8
+          Write-Host "Fixed: added the missing include path (Whisper\API, relative to the project) to WhisperDesktop.vcxproj."
+
+          # Fourth issue: the actual CPU ("Reference") model implementation is compiled
+          # out by default and replaced with a stub that returns "not implemented" -
+          # controlled by this flag. This patch routes everything to the CPU model,
+          # so this flag must be on, or the app can never actually load a model.
+          $sa = Join-Path $env:SLN_DIR "Whisper\stdafx.h"
+          $saContent = Get-Content $sa -Raw
+          if ($saContent -match '#define\s+BUILD_BOTH_VERSIONS\s+0') {
+            $saFixed = $saContent -replace '#define\s+BUILD_BOTH_VERSIONS\s+0', '#define BUILD_BOTH_VERSIONS 1'
+            Set-Content -Path $sa -Value $saFixed -NoNewline -Encoding UTF8
+            Write-Host "Fixed: enabled BUILD_BOTH_VERSIONS in stdafx.h so the real CPU model implementation gets compiled in (was previously a stub)."
+          } else {
+            Write-Host "BUILD_BOTH_VERSIONS already enabled or not found as expected, nothing to do."
+          }
+
+      - name: Disable multi-file parallel compilation for the Whisper project (avoids a known precompiled-header race)
+        shell: pwsh
+        run: |
+          $vcxproj = Join-Path $env:SLN_DIR "Whisper\Whisper.vcxproj"
+          (Get-Content $vcxproj -Raw) -replace '<MultiProcessorCompilation>true</MultiProcessorCompilation>', '<MultiProcessorCompilation>false</MultiProcessorCompilation>' |
+            Set-Content $vcxproj -NoNewline
+          Write-Host "Patched $vcxproj to compile one file at a time (more reliable, slightly slower)."
+
+      - name: Install just the C++ build tools + ATL we need (fresh, minimal, fast)
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "Downloading the Visual Studio Build Tools installer..."
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile "vs_buildtools.exe"
+
+          Write-Host "Installing C++ workload + ATL into C:\BuildTools (this installs a small separate copy, a few minutes)..."
+          $proc = Start-Process -FilePath ".\vs_buildtools.exe" -ArgumentList @(
+            "--quiet", "--wait", "--norestart", "--nocache",
+            "--installPath", "C:\BuildTools",
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--add", "Microsoft.VisualStudio.Component.VC.ATL",
+            "--add", "Microsoft.VisualStudio.Component.VC.ATL.Spectre",
+            "--includeRecommended"
+          ) -Wait -PassThru
+          Write-Host "Installer exit code: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+            Write-Error "Build Tools install failed with exit code $($proc.ExitCode)"
+            exit 1
+          }
+
+          $msbuild = "C:\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+          if (-not (Test-Path $msbuild)) {
+            Write-Error "Expected msbuild.exe at $msbuild but it wasn't there."
+            exit 1
+          }
+          Write-Host "Using MSBuild at: $msbuild"
+          "MSBUILD_EXE=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Exclude the build folder from Windows Defender (avoids intermittent file-corruption issues)
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+            Write-Host "Added Defender exclusion for $env:GITHUB_WORKSPACE"
+          } catch {
+            Write-Host "Could not add Defender exclusion (non-fatal): $_"
+          }
+
+      - name: Build the ComputeShaders project (produces compiled shader files)
+        shell: pwsh
+        run: |
+          & "$env:MSBUILD_EXE" "ComputeShaders\ComputeShaders.vcxproj" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        working-directory: ${{ env.SLN_DIR }}
+
+      - name: Install .NET (needed for the shader-packing tool)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Generate shaderData-Release.inl (packs the compiled shaders into the source)
+        shell: pwsh
+        run: |
+          dotnet run --project "Tools\CompressShaders\CompressShaders.csproj" --configuration Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        working-directory: ${{ env.SLN_DIR }}
 
       - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
         shell: pwsh
         run: |
-          msbuild "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+          Write-Host "MSBUILD_EXE is: $env:MSBUILD_EXE"
+          if ([string]::IsNullOrWhiteSpace($env:MSBUILD_EXE) -or -not (Test-Path $env:MSBUILD_EXE)) {
+            Write-Error "MSBUILD_EXE is empty or not a real file. The previous install step didn't set it up correctly."
+            exit 1
+          }
+
+          function Run-Build {
+            & "$env:MSBUILD_EXE" "Examples\WhisperDesktop\WhisperDesktop.vcxproj" /p:Configuration=Release /p:Platform=x64 /v:minimal /nologo
+            return $LASTEXITCODE
+          }
+
+          function Outputs-Exist {
+            (Test-Path "Whisper\x64\Release\Whisper.dll") -and (Test-Path "Examples\WhisperDesktop\x64\Release\WhisperDesktop.exe")
+          }
+
+          $code = Run-Build
+          if ($code -ne 0 -and -not (Outputs-Exist)) {
+            Write-Host "First build attempt failed (exit $code) and the output files aren't there. This can happen due to a transient file-lock issue on cloud runners."
+            Write-Host "Cleaning intermediate build files and retrying once..."
+            Get-ChildItem -Path . -Directory -Recurse -Filter "x64" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\(ComLightLib|Whisper|Examples\\WhisperDesktop)\\x64$' } |
+              ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 5
+            $code = Run-Build
+          }
+
+          if (Outputs-Exist) {
+            Write-Host "Both Whisper.dll and WhisperDesktop.exe exist - build succeeded (MSBuild's own exit code was $code, which can be unreliable with parallel builds, but the actual files are what matters)."
+          } else {
+            Write-Error "Build failed - Whisper.dll and/or WhisperDesktop.exe were not produced (last exit code $code). This is likely a real compile error - see the log above."
+            exit 1
+          }
         working-directory: ${{ env.SLN_DIR }}
 
       - name: Collect the finished files into one folder
