@@ -67,11 +67,17 @@ jobs:
             Write-Error "Expected msbuild.exe at $msbuild but it wasn't there."
             exit 1
           }
-          Write-Host "MSBUILD_EXE=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Using MSBuild at: $msbuild"
+          "MSBUILD_EXE=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
         shell: pwsh
         run: |
+          Write-Host "MSBUILD_EXE is: $env:MSBUILD_EXE"
+          if ([string]::IsNullOrWhiteSpace($env:MSBUILD_EXE) -or -not (Test-Path $env:MSBUILD_EXE)) {
+            Write-Error "MSBUILD_EXE is empty or not a real file. The previous install step didn't set it up correctly."
+            exit 1
+          }
           & "$env:MSBUILD_EXE" "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         working-directory: ${{ env.SLN_DIR }}
