@@ -40,7 +40,7 @@ jobs:
           # Save that folder path so later steps can use it
           "SLN_DIR=$($sln.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Fix a corrupted #include line found in the source (modelFactory.cpp)
+      - name: Fix known issues in the source (missing #include, C++-only keyword in a .c file)
         shell: pwsh
         run: |
           $mf = Join-Path $env:SLN_DIR "Whisper\modelFactory.cpp"
@@ -51,6 +51,19 @@ jobs:
             Write-Host "Fixed: modelFactory.cpp had 'using ""stdafx.h""' instead of '#include ""stdafx.h""'. Corrected it."
           } else {
             Write-Host "No corruption found in modelFactory.cpp (already fine, nothing to do)."
+          }
+
+          # Second issue: ggmlMsvc.c is compiled as plain C, but uses the C++-only
+          # 'alignas' keyword, which MSVC's C compiler doesn't understand by default.
+          # Switch it to the MSVC-native equivalent that works in C.
+          $gm = Join-Path $env:SLN_DIR "Whisper\source.compat\ggmlMsvc.c"
+          $gmContent = Get-Content $gm -Raw
+          if ($gmContent -match 'alignas\(\s*32\s*\)') {
+            $gmFixed = $gmContent -replace 'alignas\(\s*32\s*\)', '__declspec(align(32))'
+            Set-Content -Path $gm -Value $gmFixed -NoNewline -Encoding UTF8
+            Write-Host "Fixed: ggmlMsvc.c used C++-only 'alignas', replaced with __declspec(align(32)) so it compiles as C."
+          } else {
+            Write-Host "No alignas issue found in ggmlMsvc.c (already fine, nothing to do)."
           }
 
       - name: Disable multi-file parallel compilation for the Whisper project (avoids a known precompiled-header race)
