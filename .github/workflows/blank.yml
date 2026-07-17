@@ -40,6 +40,14 @@ jobs:
           # Save that folder path so later steps can use it
           "SLN_DIR=$($sln.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Disable multi-file parallel compilation for the Whisper project (avoids a known precompiled-header race)
+        shell: pwsh
+        run: |
+          $vcxproj = Join-Path $env:SLN_DIR "Whisper\Whisper.vcxproj"
+          (Get-Content $vcxproj -Raw) -replace '<MultiProcessorCompilation>true</MultiProcessorCompilation>', '<MultiProcessorCompilation>false</MultiProcessorCompilation>' |
+            Set-Content $vcxproj -NoNewline
+          Write-Host "Patched $vcxproj to compile one file at a time (more reliable, slightly slower)."
+
       - name: Install just the C++ build tools + ATL we need (fresh, minimal, fast)
         shell: pwsh
         run: |
