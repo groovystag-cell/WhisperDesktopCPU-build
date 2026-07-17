@@ -70,6 +70,25 @@ jobs:
           Write-Host "Using MSBuild at: $msbuild"
           "MSBUILD_EXE=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Build the ComputeShaders project (produces compiled shader files)
+        shell: pwsh
+        run: |
+          & "$env:MSBUILD_EXE" "WhisperCpp.sln" "/t:ComputeShaders" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        working-directory: ${{ env.SLN_DIR }}
+
+      - name: Install .NET (needed for the shader-packing tool)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Generate shaderData-Release.inl (packs the compiled shaders into the source)
+        shell: pwsh
+        run: |
+          dotnet run --project "Tools\CompressShaders\CompressShaders.csproj" --configuration Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        working-directory: ${{ env.SLN_DIR }}
+
       - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
         shell: pwsh
         run: |
