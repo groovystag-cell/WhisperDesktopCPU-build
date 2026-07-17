@@ -70,6 +70,16 @@ jobs:
           Write-Host "Using MSBuild at: $msbuild"
           "MSBUILD_EXE=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Exclude the build folder from Windows Defender (avoids intermittent file-corruption issues)
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+            Write-Host "Added Defender exclusion for $env:GITHUB_WORKSPACE"
+          } catch {
+            Write-Host "Could not add Defender exclusion (non-fatal): $_"
+          }
+
       - name: Build the ComputeShaders project (produces compiled shader files)
         shell: pwsh
         run: |
@@ -97,8 +107,27 @@ jobs:
             Write-Error "MSBUILD_EXE is empty or not a real file. The previous install step didn't set it up correctly."
             exit 1
           }
-          & "$env:MSBUILD_EXE" "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          function Run-Build {
+            & "$env:MSBUILD_EXE" "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+            return $LASTEXITCODE
+          }
+
+          $code = Run-Build
+          if ($code -ne 0) {
+            Write-Host "First build attempt failed (exit $code). This can happen due to a transient file-lock issue on cloud runners."
+            Write-Host "Cleaning intermediate build files and retrying once..."
+            Get-ChildItem -Path . -Directory -Recurse -Filter "x64" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\(ComLightLib|Whisper|Examples\\WhisperDesktop)\\x64$' } |
+              ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 5
+            $code = Run-Build
+          }
+
+          if ($code -ne 0) {
+            Write-Error "Build failed again after a clean retry (exit $code). This is likely a real compile error - see the log above."
+            exit $code
+          }
         working-directory: ${{ env.SLN_DIR }}
 
       - name: Collect the finished files into one folder
