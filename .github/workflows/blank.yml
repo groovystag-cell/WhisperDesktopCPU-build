@@ -71,13 +71,11 @@ jobs:
           # the repo). It needs to find Whisper/API/whisperWindows.h. Add that include path.
           $wd = Join-Path $env:SLN_DIR "Examples\WhisperDesktop\WhisperDesktop.vcxproj"
           $wdContent = Get-Content $wd -Raw
-          if ($wdContent -notmatch 'AdditionalIncludeDirectories') {
-            $wdFixed = $wdContent -replace '(<ClCompile>)', "`$1`r`n      <AdditionalIncludeDirectories>`$(SolutionDir)Whisper\API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>"
-            Set-Content -Path $wd -Value $wdFixed -NoNewline -Encoding UTF8
-            Write-Host "Fixed: added the missing include path (Whisper\API) to WhisperDesktop.vcxproj."
-          } else {
-            Write-Host "WhisperDesktop.vcxproj already has AdditionalIncludeDirectories set, nothing to do."
-          }
+          # Remove any previous (possibly broken) attempt at this fix first, so re-runs are safe.
+          $wdContent = $wdContent -replace '\r?\n\s*<AdditionalIncludeDirectories>[^<]*</AdditionalIncludeDirectories>', ''
+          $wdFixed = $wdContent -replace '(<ClCompile>)', "`$1`r`n      <AdditionalIncludeDirectories>`$(ProjectDir)..\..\Whisper\API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>"
+          Set-Content -Path $wd -Value $wdFixed -NoNewline -Encoding UTF8
+          Write-Host "Fixed: added the missing include path (Whisper\API, relative to the project) to WhisperDesktop.vcxproj."
 
       - name: Disable multi-file parallel compilation for the Whisper project (avoids a known precompiled-header race)
         shell: pwsh
