@@ -117,7 +117,7 @@ jobs:
       - name: Build the ComputeShaders project (produces compiled shader files)
         shell: pwsh
         run: |
-          & "$env:MSBUILD_EXE" "WhisperCpp.sln" "/t:ComputeShaders" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+          & "$env:MSBUILD_EXE" "ComputeShaders\ComputeShaders.vcxproj" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         working-directory: ${{ env.SLN_DIR }}
 
@@ -143,7 +143,7 @@ jobs:
           }
 
           function Run-Build {
-            & "$env:MSBUILD_EXE" "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+            & "$env:MSBUILD_EXE" "Examples\WhisperDesktop\WhisperDesktop.vcxproj" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
             return $LASTEXITCODE
           }
 
