@@ -47,28 +47,33 @@ jobs:
           Write-Host "Downloading the Visual Studio Build Tools installer..."
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile "vs_buildtools.exe"
 
-          Write-Host "Installing C++ workload + ATL (this installs a small separate copy, a few minutes)..."
+          Write-Host "Installing C++ workload + ATL into C:\BuildTools (this installs a small separate copy, a few minutes)..."
           $proc = Start-Process -FilePath ".\vs_buildtools.exe" -ArgumentList @(
             "--quiet", "--wait", "--norestart", "--nocache",
+            "--installPath", "C:\BuildTools",
             "--add", "Microsoft.VisualStudio.Workload.VCTools",
             "--add", "Microsoft.VisualStudio.Component.VC.ATL",
             "--add", "Microsoft.VisualStudio.Component.VC.ATL.Spectre",
             "--includeRecommended"
           ) -Wait -PassThru
           Write-Host "Installer exit code: $($proc.ExitCode)"
-          # Exit code 3010 means "success, reboot recommended" - fine to ignore in CI.
           if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
             Write-Error "Build Tools install failed with exit code $($proc.ExitCode)"
             exit 1
           }
 
-      - name: Make sure MSBuild is on the PATH
-        uses: microsoft/setup-msbuild@v2
+          $msbuild = "C:\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+          if (-not (Test-Path $msbuild)) {
+            Write-Error "Expected msbuild.exe at $msbuild but it wasn't there."
+            exit 1
+          }
+          Write-Host "MSBUILD_EXE=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build ComLightLib, Whisper, WhisperDesktop (Release | x64)
         shell: pwsh
         run: |
-          msbuild "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+          & "$env:MSBUILD_EXE" "WhisperCpp.sln" "/t:ComLightLib;Whisper;WhisperDesktop" /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         working-directory: ${{ env.SLN_DIR }}
 
       - name: Collect the finished files into one folder
