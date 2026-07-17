@@ -40,6 +40,19 @@ jobs:
           # Save that folder path so later steps can use it
           "SLN_DIR=$($sln.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Fix a corrupted #include line found in the source (modelFactory.cpp)
+        shell: pwsh
+        run: |
+          $mf = Join-Path $env:SLN_DIR "Whisper\modelFactory.cpp"
+          $content = Get-Content $mf -Raw
+          if ($content -match 'using\s+"stdafx\.h"') {
+            $fixed = $content -replace 'using\s+"stdafx\.h"', '#include "stdafx.h"'
+            Set-Content -Path $mf -Value $fixed -NoNewline -Encoding UTF8
+            Write-Host "Fixed: modelFactory.cpp had 'using ""stdafx.h""' instead of '#include ""stdafx.h""'. Corrected it."
+          } else {
+            Write-Host "No corruption found in modelFactory.cpp (already fine, nothing to do)."
+          }
+
       - name: Disable multi-file parallel compilation for the Whisper project (avoids a known precompiled-header race)
         shell: pwsh
         run: |
