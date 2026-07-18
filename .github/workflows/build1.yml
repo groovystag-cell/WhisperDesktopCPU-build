@@ -98,10 +98,10 @@ jobs:
           $wcContent = Get-Content $wc -Raw
 
           $oldRunFull = "HRESULT COMLIGHTCALL runFull( const sFullParams& params, const iAudioBuffer* buffer ) override final`n`t`t{`n`t`t`twhisper_full_params wfp = makeOldParams( params, this );"
-          $newRunFull = "HRESULT COMLIGHTCALL runFull( const sFullParams& params, const iAudioBuffer* buffer ) override final`n`t`t{`n`t`t`t{ FILE* f = nullptr; _wfopen_s( &f, L`"C:\wd_debug.txt`", L`"a`" ); if( f ) { fprintf( f, `"runFull ENTERED`n`" ); fclose( f ); } }`n`t`t`twhisper_full_params wfp = makeOldParams( params, this );"
+          $newRunFull = "HRESULT COMLIGHTCALL runFull( const sFullParams& params, const iAudioBuffer* buffer ) override final`n`t`t{`n`t`t`t{ FILE* f = nullptr; _wfopen_s( &f, L`"C:\\wd_debug.txt`", L`"a`" ); if( f ) { fprintf( f, `"runFull ENTERED\n`" ); fclose( f ); } }`n`t`t`twhisper_full_params wfp = makeOldParams( params, this );"
 
           $oldRunStreamed = "HRESULT COMLIGHTCALL runStreamed( const sFullParams& params, const sProgressSink& progress, const iAudioReader* reader ) override final`n`t`t{`n`t`t`tlogError("
-          $newRunStreamed = "HRESULT COMLIGHTCALL runStreamed( const sFullParams& params, const sProgressSink& progress, const iAudioReader* reader ) override final`n`t`t{`n`t`t`t{ FILE* f = nullptr; _wfopen_s( &f, L`"C:\wd_debug.txt`", L`"a`" ); if( f ) { fprintf( f, `"runStreamed ENTERED`n`" ); fclose( f ); } }`n`t`t`tlogError("
+          $newRunStreamed = "HRESULT COMLIGHTCALL runStreamed( const sFullParams& params, const sProgressSink& progress, const iAudioReader* reader ) override final`n`t`t{`n`t`t`t{ FILE* f = nullptr; _wfopen_s( &f, L`"C:\\wd_debug.txt`", L`"a`" ); if( f ) { fprintf( f, `"runStreamed ENTERED\n`" ); fclose( f ); } }`n`t`t`tlogError("
 
           if ($wcContent.Contains($oldRunFull) -and $wcContent.Contains($oldRunStreamed)) {
             $wcContent = $wcContent.Replace($oldRunFull, $newRunFull).Replace($oldRunStreamed, $newRunStreamed)
