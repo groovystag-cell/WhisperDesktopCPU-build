@@ -91,6 +91,26 @@ jobs:
             Write-Host "BUILD_BOTH_VERSIONS already enabled or not found as expected, nothing to do."
           }
 
+          # TEMPORARY DIAGNOSTIC: instrument runFull/runStreamed to write to C:\wd_debug.txt
+          # the instant either one actually starts running, so we can prove with certainty
+          # which one is really being invoked at runtime.
+          $wc = Join-Path $env:SLN_DIR "Whisper\whisperCom.cpp"
+          $wcContent = Get-Content $wc -Raw
+
+          $oldRunFull = "HRESULT COMLIGHTCALL runFull( const sFullParams& params, const iAudioBuffer* buffer ) override final`n`t`t{`n`t`t`twhisper_full_params wfp = makeOldParams( params, this );"
+          $newRunFull = "HRESULT COMLIGHTCALL runFull( const sFullParams& params, const iAudioBuffer* buffer ) override final`n`t`t{`n`t`t`t{ FILE* f = nullptr; _wfopen_s( &f, L`"C:\wd_debug.txt`", L`"a`" ); if( f ) { fprintf( f, `"runFull ENTERED`n`" ); fclose( f ); } }`n`t`t`twhisper_full_params wfp = makeOldParams( params, this );"
+
+          $oldRunStreamed = "HRESULT COMLIGHTCALL runStreamed( const sFullParams& params, const sProgressSink& progress, const iAudioReader* reader ) override final`n`t`t{`n`t`t`tlogError("
+          $newRunStreamed = "HRESULT COMLIGHTCALL runStreamed( const sFullParams& params, const sProgressSink& progress, const iAudioReader* reader ) override final`n`t`t{`n`t`t`t{ FILE* f = nullptr; _wfopen_s( &f, L`"C:\wd_debug.txt`", L`"a`" ); if( f ) { fprintf( f, `"runStreamed ENTERED`n`" ); fclose( f ); } }`n`t`t`tlogError("
+
+          if ($wcContent.Contains($oldRunFull) -and $wcContent.Contains($oldRunStreamed)) {
+            $wcContent = $wcContent.Replace($oldRunFull, $newRunFull).Replace($oldRunStreamed, $newRunStreamed)
+            Set-Content -Path $wc -Value $wcContent -NoNewline -Encoding UTF8
+            Write-Host "Added temporary diagnostic logging to runFull/runStreamed in whisperCom.cpp."
+          } else {
+            Write-Host "WARNING: could not find the expected exact text to patch for diagnostics - skipping this step (build will continue without it)."
+          }
+
       - name: Disable multi-file parallel compilation for the Whisper project (avoids a known precompiled-header race)
         shell: pwsh
         run: |
